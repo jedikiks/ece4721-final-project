@@ -80,26 +80,28 @@ js_get_input (void)
 {
   double js_x_value, js_y_value;
 
+  /*
   if (debounce (JS_SW_PIN) == 1)
     return 4;
+    */
 
   /* Get input from channel 0, x */
   ADC0_SSMUX3_R = 0;
   js_x_value = adc_read ();
 
-  if (js_x_value > 3660)
-    return 1;
-  else if (js_x_value < 50)
+  if (js_x_value > JS_X_R)
     return 0;
+  else if (js_x_value < JS_X_L)
+    return 1;
 
   /* Get input from channel 1, y */
   ADC0_SSMUX3_R = 1;
   js_y_value = adc_read ();
 
-  if (js_y_value < 300)
-    return 2;
-  else if (js_y_value > 3520)
+  if (js_y_value < JS_Y_U)
     return 3;
+  else if (js_y_value > JS_Y_D)
+    return 2;
 
   return -1;
 }
