@@ -14,3 +14,12 @@ ms_delay (unsigned int t)
     for (j = 0; j < 4000; j++)
       ;
 }
+
+void
+delay_us (int delay)
+{
+  while (delay--)
+    {
+      __asm ("nop"); // almost 1.3us
+    }
+}

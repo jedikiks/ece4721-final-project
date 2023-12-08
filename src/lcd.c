@@ -1,98 +1,135 @@
 #include "../inc/lcd.h"
+#include "../inc/tm4c123gh6pm.h"
+#include "../inc/util.h"
+#include <stdint.h>
 
-#include "TM4C123.h"    // Device header
+#define LCD_ADDR 0x27
 
-#define LCD GPIOB    		//LCD port with Tiva C 
-#define RS 0x01				 	//RS -> PB0 (0x01)
-#define RW 0x02         //RW -> PB1 (0x02)
-#define EN 0x04  		 	 	//EN -> PB2 (0x04)
+// IO direction
+#define _IN() (GPIO_PORTF_DIR_R &= ~MASK (SDA_PIN)) // PF2 as input
+#define _OUT() (GPIO_PORTF_DIR_R |= MASK (SDA_PIN)) // PF2 as out
 
+// IO control
 
-//Functions Declaration
-void delayUs(int);   														   //Delay in Micro Seconds
-void delayMs(int);   														   //Delay in Milli Seconds
+#define I2C_SCL(a)                                                            \
+  (a ? (GPIO_PORTF_DATA_R |= MASK (SCL_PIN))                                  \
+     : (GPIO_PORTF_DATA_R &= ~MASK (SCL_PIN))) // SCL I2C clock
 
-void lcd_clear(void){
-	 LCD4bits_Cmd(0x01); 
-	 delayMs(500);
-	 LCD4bits_Cmd(0x80);
-	 delayMs(500);	 
-}
-void LCD_DisplayString(char* str)
+#define I2C_SDA(b)                                                            \
+  (b ? (GPIO_PORTF_DATA_R |= MASK (SDA_PIN))                                  \
+     : (GPIO_PORTF_DATA_R &= ~MASK (SDA_PIN))) // SDA I2C data
+
+#define IN_SDA() ((GPIO_PORTF_DATA_R & MASK (SDA_PIN)) ? 1 : 0) // read
+
+static int i = 0, change = 1;
+
+// delay
+void delay_us (int delay);
+
+// I2c
+void I2C_Stop (void);
+void I2C_Start (void);
+void I2C_Wait_ACK (void);
+void I2C_write_byte (uint8_t data);
+
+void I2C_write_data (uint8_t data);
+
+// Tri. Initilization
+void LCD_Init (void);
+
+void
+I2C_Init (void)
 {
-    LCD4bits_Init();                 // Initialization of LCD
-    LCD4bits_Cmd(0x01);              // Clear the display
-    LCD4bits_Cmd(0x80);              // Force the cursor to the beginning of the 1st line
-    delayMs(500);                    // Delay 500 ms for LCD (MCU is faster than LCD)
-    LCD_WriteString(str);            // Write the string on LCD
-    delayMs(500);                    // Delay 500 ms to let the LCD display the data
+  SYSCTL_RCGCGPIO_R |= SYSCTL_RCGC2_GPIOB; // actvie clock for PB;
+
+  GPIO_PORTB_DIR_R |= (MASK (SCL_PIN) | MASK (SDA_PIN));
+  GPIO_PORTB_DEN_R |= (MASK (SCL_PIN) | MASK (SDA_PIN));
+
+  I2C_SCL (1);
+  I2C_SDA (1);
+
+  I2C_Start ();
+  I2C_write_byte (LCD_ADDR);
+  I2C_Wait_ACK ();
 }
 
-void LCD4bits_Init(void)
+void
+I2C_Start (void)
 {
-	SYSCTL->RCGCGPIO |= 0x02;    //enable clock for PORTB
-	delayMs(10);                 //delay 10 ms for enable the clock of PORTB
-  LCD->DIR = 0xFF;             //let PORTB as output pins
-	LCD->DEN = 0xFF;             //enable PORTB digital IO pins
-	LCD4bits_Cmd(0x28);          //2 lines and 5x7 character (4-bit data, D4 to D7)
-	LCD4bits_Cmd(0x06);          //Automatic Increment cursor (shift cursor to right)
-	LCD4bits_Cmd(0x01);					 //Clear display screen
-	LCD4bits_Cmd(0x0F);          //Display on, cursor blinking
+  _OUT ();
+  I2C_SCL (1);
+  I2C_SDA (1);
+  delay_us (5);
+  I2C_SDA (0);
+  delay_us (5);
+  I2C_SCL (0);
 }
 
-
-void LCD_Write4bits(unsigned char data, unsigned char control)
+void
+I2C_Stop (void)
 {
-	data &= 0xF0;                       //clear lower nibble for control 
-	control &= 0x0F;                    //clear upper nibble for data
-	LCD->DATA = data | control;         //Include RS value (command or data ) with data 
-	LCD->DATA = data | control | EN;    //pulse EN
-	delayUs(0);													//delay for pulsing EN
-	LCD->DATA = data | control;					//Turn off the pulse EN
-	LCD->DATA = 0;                      //Clear the Data 
+  _OUT ();
+  I2C_SCL (0);
+  I2C_SDA (0);
+  delay_us (5);
+  I2C_SCL (1);
+  I2C_SDA (1);
+  delay_us (5);
 }
 
-void LCD_WriteString(char * str)
-{  
-	volatile int i = 0;          //volatile is important 
-	
-	while(*(str+i) != '\0')       //until the end of the string
-	{
-		LCD4bits_Data(*(str+i));    //Write each character of string
-		i++;                        //increment for next character
-	}
-}
-
-void LCD4bits_Cmd(unsigned char command)
+void
+I2C_Wait_ACK (void)
 {
-	LCD_Write4bits(command & 0xF0 , 0);    //upper nibble first
-	LCD_Write4bits(command << 4 , 0);			 //then lower nibble
-	
-	if(command < 4)
-		delayMs(2);       //commands 1 and 2 need up to 1.64ms
-	else
-		delayUs(40);      //all others 40 us
+  uint16_t error = 0;
+  _IN ();
+  I2C_SDA (1);
+  delay_us (3);
+  I2C_SCL (1);
+  delay_us (3);
+  while (IN_SDA ())
+    {
+      error++;
+      if (error > 350)
+        {
+          I2C_Stop ();
+        }
+    }
+  I2C_SCL (0);
 }
 
-void LCD4bits_Data(unsigned char data)
+void
+I2C_write_byte (uint8_t data)
 {
-	LCD_Write4bits(data & 0xF0 , RS);   //upper nibble first
-	LCD_Write4bits(data << 4 , RS);     //then lower nibble
-	delayUs(40);												//delay for LCD (MCU is faster than LCD)
+  uint8_t d;
+  _OUT ();
+  I2C_SCL (0);
+  for (d = 0; d < 8; d++)
+    {
+      I2C_SDA (((data & 0x80) >> 7));
+      data <<= 1;
+      delay_us (3);
+      I2C_SCL (1);
+      delay_us (3);
+      I2C_SCL (0);
+      delay_us (3);
+    }
 }
 
-void delayMs(int n)
-{  
-	volatile int i,j;             //volatile is important for variables incremented in code
-	for(i=0;i<n;i++)
-		for(j=0;j<3180;j++)         //delay for 1 msec
-		{}
-}
-
-void delayUs(int n)             
+void
+I2C_Init (void)
 {
-	volatile int i,j;							//volatile is important for variables incremented in code
-	for(i=0;i<n;i++)
-		for(j=0;j<3;j++)            //delay for 1 micro second
-		{}
 }
+
+void
+I2C_write_data (uint8_t data)
+{
+  I2C_write_byte (LCD_ADDR); // write register: was 0x40
+  I2C_Wait_ACK ();
+  I2C_write_byte (((uint8_t)(i >> 4))
+                  & 0xFF); //(the first 1 byte of 12 bits value)
+  I2C_Wait_ACK ();
+  I2C_write_byte (
+      ((uint8_t)((i << 4)) & 0xF0)); //(the last 4 bit of the value)
+  I2C_Wait_ACK ();
+}
+
